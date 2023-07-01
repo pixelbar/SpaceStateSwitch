@@ -15,6 +15,7 @@
 #include <AsyncJson.h> // Included with ArduinoJson
 #include <ArduinoJson.h> // From Library Manager, version 6.21.2
 
+#include "Constants.h"
 
 char mqttServer[40];
 char mqttPort[6] = "1883";
@@ -22,15 +23,17 @@ char mqttUsername[34];
 char mqttPassword[34];
 
 WiFiManager wifiManager;
-WiFiManagerParameter paramMQTTServer("mqtt_server", "MQTT Server", mqttServer, 40);
-WiFiManagerParameter paramMQTTPort("mqtt_port", "MQTT Port", mqttPort, 6);
-WiFiManagerParameter paramMQTTUsername("mqtt_username", "MQTT Auth Username (leave blank if unauthenticated)", mqttUsername, 40, " type='username' autocapitalize='none'");
-WiFiManagerParameter paramMQTTPassword("mqtt_password", "MQTT Auth Password (leave blank if unauthenticated)", mqttPassword, 40, " type='password'");
+WiFiManagerParameter paramMQTTServer(PREFERENCE_MQTT_SERVER_KEY, "MQTT Server", mqttServer, 40);
+WiFiManagerParameter paramMQTTPort(PREFERENCE_MQTT_PORT_KEY, "MQTT Port", mqttPort, 6);
+WiFiManagerParameter paramMQTTUsername(PREFERENCE_MQTT_USERNAME_KEY, "MQTT Auth Username (leave blank if unauthenticated)", mqttUsername, 40, " type='username' autocapitalize='none'");
+WiFiManagerParameter paramMQTTPassword(PREFERENCE_MQTT_PASSWORD_KEY, "MQTT Auth Password (leave blank if unauthenticated)", mqttPassword, 40, " type='password'");
 
 Preferences preferences;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+Adafruit_NeoPixel neopixels(NUMBER_OF_PIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 String hostname;
 String mqttStateTopic;
@@ -43,23 +46,9 @@ bool stateNew = false;
 unsigned long lastTime = 0;
 unsigned long delTime = 250;
 
-#define ESP_DRD_USE_EEPROM      false
-#define ESP_DRD_USE_SPIFFS      true
-
-// Number of seconds after reset during which a 
-// subseqent reset will be considered a double reset.
-#define DRD_TIMEOUT 10
-
-// RTC Memory Address for the DoubleResetDetector to use
-#define DRD_ADDRESS 0
-
 DoubleResetDetector* drd;
 
-// The network SSID for the config portal.
-#define CONFIG_AP_SSID "space-state-switch"
 
-// The network password for the config portal.
-#define CONFIG_AP_PASSWORD "1337hacker"
 
 void setup() {
   Serial.begin(115200);
@@ -122,12 +111,12 @@ void setupWiFiManager() {
 void readPreferences() {
   Serial.println("Reading preferenes");
 
-  preferences.begin("space-state-switch", true);
+  preferences.begin(PREFERENCES_NAMESPACE, true);
 
-  preferences.getString(paramMQTTServer.getID(), mqttServer, 40);
-  preferences.getString(paramMQTTPort.getID(), mqttPort, 6);
-  preferences.getString(paramMQTTUsername.getID(), mqttUsername, 34);
-  preferences.getString(paramMQTTPassword.getID(), mqttPassword, 34);
+  preferences.getString(PREFERENCE_MQTT_SERVER_KEY, mqttServer, 40);
+  preferences.getString(PREFERENCE_MQTT_PORT_KEY, mqttPort, 6);
+  preferences.getString(PREFERENCE_MQTT_USERNAME_KEY, mqttUsername, 34);
+  preferences.getString(PREFERENCE_MQTT_PASSWORD_KEY, mqttPassword, 34);
 
   if (atoi(mqttPort) <= 0) {
     strcpy(mqttPort, "1883");
@@ -237,12 +226,12 @@ void saveConfigCallback() {
   strcpy(mqttUsername, paramMQTTUsername.getValue());
   strcpy(mqttPassword, paramMQTTPassword.getValue());
 
-  preferences.begin("space-state-switch", false);
+  preferences.begin(PREFERENCES_NAMESPACE, false);
   
-  preferences.putString(paramMQTTServer.getID(), mqttServer);
-  preferences.putString(paramMQTTPort.getID(), mqttPort);
-  preferences.putString(paramMQTTUsername.getID(), mqttUsername);
-  preferences.putString(paramMQTTPassword.getID(), mqttPassword);
+  preferences.putString(PREFERENCE_MQTT_SERVER_KEY, mqttServer);
+  preferences.putString(PREFERENCE_MQTT_PORT_KEY, mqttPort);
+  preferences.putString(PREFERENCE_MQTT_USERNAME_KEY, mqttUsername);
+  preferences.putString(PREFERENCE_MQTT_PASSWORD_KEY, mqttPassword);
 
   preferences.end();
 
