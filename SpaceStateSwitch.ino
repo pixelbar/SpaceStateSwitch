@@ -47,7 +47,7 @@ unsigned long switchStateCheckInterval = 250;
 
 DoubleResetDetector* drd;
 
-
+AsyncWebServer webServer(80);
 
 void setup() {
   Serial.begin(115200);
@@ -69,6 +69,7 @@ void setup() {
   readPreferences();
 
   setupWiFiManager();
+  setupHTTPServer();
 }
 
 void setupWiFiManager() {
@@ -108,6 +109,71 @@ void setupWiFiManager() {
     Serial.print("Config portal started automatically, network password: ");
     Serial.println(CONFIG_AP_PASSWORD);
   }
+}
+
+void setupHTTPServer() {
+  webServer.onNotFound([](AsyncWebServerRequest *request) {
+    if (request->method() == HTTP_OPTIONS) {
+      request->send(200);
+    } else {
+      request->send(404, "text/html", "<html><head><title>Page Not Found</title><body>Page Not Found</body></html>");
+    }
+  });
+
+  webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncJsonResponse * response = new AsyncJsonResponse();
+    response->addHeader("X-Server","ESP Async Web Server");
+
+    JsonObject root = response->getRoot();
+    root["is_open"] = currentSwitchState;
+    root["state"] = currentSwitchState;
+    root["is_overwritten"] = false;
+    root["physical_state"] = currentSwitchState;
+    JsonArray array = root.createNestedArray("endpoints");
+    array.add("GET /heap");
+    array.add("GET /info");
+    response->setLength();
+
+    request->send(response);
+  });
+
+  webServer.on("/heap", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncJsonResponse *response = new AsyncJsonResponse();
+    response->addHeader("X-Server","ESP Async Web Server");
+
+    JsonObject root = response->getRoot();
+    root["uptime"] = millis();
+    root["heap"] = ESP.getFreeHeap();
+    response->setLength();
+    request->send(response);
+  });
+
+  webServer.on("/info", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncJsonResponse *response = new AsyncJsonResponse();
+    response->addHeader("X-Server","ESP Async Web Server");
+
+    JsonObject root = response->getRoot();
+    root["chip_id"] = WiFi.macAddress();
+    root["ip_address"] = WiFi.localIP();
+    root["mac_address"] = WiFi.macAddress();
+    root["uptime"] = millis();
+    root["change_wifi_instructions"] = "Double press the reset button to enter config mode.";
+    if (strlen(mqttServer) > 1) {
+      root["mqtt_server"] = mqttServer;  
+    } else {
+      root["mqtt_server"] = nullptr;
+    }
+    JsonObject aboutObject = root.createNestedObject("about");
+    aboutObject["original_by"] = "meepe";
+    aboutObject["modified_by"] = "renssies";
+    aboutObject["hardware"] = "Arduino on a ESP32 Wemos D1 Mini Alternative";
+    aboutObject["repository"] = "https://github.com/pixelbar/SpaceStateSwitch";
+    response->setLength();
+    
+    request->send(response);
+  });
+
+  webServer.begin();
 }
 
 void readPreferences() {
@@ -193,6 +259,8 @@ void turnOff(){
 
 void loop() {
   drd->loop();
+  wifiManager.process();
+  MDNS.update();
 
   checkSwitchState();
 }
