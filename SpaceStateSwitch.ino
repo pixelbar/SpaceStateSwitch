@@ -39,12 +39,11 @@ String hostname;
 String mqttStateTopic;
 String mqttLastWillTopic;
 
-const int butPin = 26; // Pin D1 | 0 = D3
-const int ledPin = 2; // Pin D4 and Onbard LED
-bool stateOld = false;
-bool stateNew = false;
-unsigned long lastTime = 0;
-unsigned long delTime = 250;
+bool hasDeterminedInitalState = false;
+bool currentSwitchState = false; // false == off/closed, true == on/open
+
+unsigned long lastSwitchStateCheck = 0;
+unsigned long switchStateCheckInterval = 250;
 
 DoubleResetDetector* drd;
 
@@ -53,10 +52,13 @@ DoubleResetDetector* drd;
 void setup() {
   Serial.begin(115200);
 
+  neopixels.begin();
+  updateLEDs();
+
   drd = new DoubleResetDetector(DRD_TIMEOUT, DRD_ADDRESS);
 
-  pinMode(butPin, INPUT_PULLUP);
-  pinMode(ledPin, OUTPUT);
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(BUILTIN_LED_PIN, OUTPUT);
 
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
 
@@ -192,26 +194,59 @@ void turnOff(){
 void loop() {
   drd->loop();
 
-  stateNew = digitalRead(butPin);
+  checkSwitchState();
+}
 
-  if(stateNew != stateOld){
-    if((millis() - lastTime) > delTime){
-      lastTime = millis();
-      if(stateNew != stateOld){
-        Serial.println("");
-        Serial.print(millis());
-        Serial.print(" State = ");
-        Serial.println(stateNew);
-        stateOld = stateNew;
-        digitalWrite(ledPin, stateOld);
-        if(stateNew){
-          turnOff();
-        } else {
-          turnOn();
-        }
-      }
-    }
+void checkSwitchState() {
+  unsigned long now = millis();
+  if ((now - lastSwitchStateCheck) <= switchStateCheckInterval) {
+    return;
   }
+  bool newSwitchState = digitalRead(SWITCH_PIN) == LOW;
+  lastSwitchStateCheck = now;
+  if (!hasDeterminedInitalState) {
+    currentSwitchState = newSwitchState;
+    hasDeterminedInitalState = true;
+    Serial.print("Determined original state: ");
+    if (newSwitchState) {
+      Serial.println("Open!");
+    } else {
+      Serial.println("Closed!");
+    }
+    updateLEDs();
+    return;
+  }
+  if (currentSwitchState == newSwitchState) {
+    return;
+  }
+  currentSwitchState = newSwitchState;
+
+  Serial.println("State has changed, new: ");
+  if (newSwitchState) {
+    Serial.println("Open!");
+  } else {
+    Serial.println("Closed!");
+  }
+  updateLEDs();
+  if (newSwitchState) {
+    turnOn();
+  } else {
+    turnOff();
+  }
+}
+
+void updateLEDs() {
+  int ledState = currentSwitchState ? HIGH : LOW;
+  digitalWrite(BUILTIN_LED_PIN, ledState);
+
+  uint32_t neopixelColor = neopixels.Color(255, 0, 0); // Red
+
+  if (currentSwitchState) {
+    neopixelColor = neopixels.Color(0, 255, 0); // Green
+  }
+
+  neopixels.fill(neopixelColor);
+  neopixels.show();
 }
 
 // 

@@ -7,6 +7,8 @@
 // The pin for the switch header (INPUT_PULLUP)
 #define SWITCH_PIN 26 // IO26/D0
 
+#define BUILTIN_LED_PIN 2
+
 // The number of Neopixels supported on the header
 #define NUMBER_OF_PIXELS 5
 
