@@ -13,11 +13,12 @@
 #define NUMBER_OF_PIXELS 5
 
 // Needed for "DoubleResetDetector", telling it to use SPIFFS.
-#define ESP_DRD_USE_EEPROM      false
+#define ESP_DRD_USE_LITTLEFS    false
 #define ESP_DRD_USE_SPIFFS      true
+#define ESP_DRD_USE_EEPROM      false
 
 // Number of seconds after reset during which a 
-// subseqent reset will be considered a double reset.
+// subsequent reset will be considered a double reset.
 #define DRD_TIMEOUT 10
 
 // RTC Memory Address for the DoubleResetDetector to use. Required, but not used on the ESP32
@@ -36,7 +37,7 @@
 #define HOSTNAME_PREFIX "space-state-switch"
 
 // The namespace used for the ESP32 preferences.
-#define PREFERENCES_NAMESPACE "space-state-switch"
+#define PREFERENCES_NAMESPACE "space-state"
 
 // The key used for the MQTT server in ESP32 Preferences and WiFiManager Parameter.
 #define PREFERENCE_MQTT_SERVER_KEY "mqtt_server"
@@ -49,7 +50,5 @@
 
 // The key used for the MQTT password in ESP32 Preferences and WiFiManager Parameter.
 #define PREFERENCE_MQTT_PASSWORD_KEY "mqtt_password"
-
-
 
 #endif 

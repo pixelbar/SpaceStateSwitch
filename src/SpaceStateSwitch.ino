@@ -1,3 +1,5 @@
+#include "Constants.h"
+
 #include <Arduino.h>
 #include <WiFi.h> //  Built in with ESP32
 #include <WiFiClient.h> //  Built in with ESP32
@@ -5,17 +7,16 @@
 #include <ESPmDNS.h>  //  Built in with ESP32
 #include <HTTPClient.h> // Built in with ESP32
 
-#include <ESP_DoubleResetDetector.h> // From Library Manager, version 1.3.2
-#include <Adafruit_NeoPixel.h> // From Library Manager, version 1.11.0
-#include <WiFiManager.h> // From Library Manager, version 2.0.15-rc.1
-#include <PubSubClient.h> // https://pubsubclient.knolleary.net, version 2.8.0
+#include <ESP_DoubleResetDetector.h> 
+#include <Adafruit_NeoPixel.h>
+#include <WiFiManager.h> 
+#include <PubSubClient.h>
 
-#include <AsyncTCP.h> // Included with ESPAsyncWebserver
-#include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer/tree/f71e3d427b5be9791a8a2c93cf8079792c3a9a26
-#include <AsyncJson.h> // Included with ArduinoJson
-#include <ArduinoJson.h> // From Library Manager, version 6.21.2
-
-#include "Constants.h"
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncJson.h>
+#include <ArduinoJson.h>
+#include "SPIFFS.h"
 
 char mqttServer[40];
 char mqttPort[6] = "1883";
@@ -44,12 +45,15 @@ bool currentSwitchState = false; // false == off/closed, true == on/open
 
 unsigned long lastSwitchStateCheck = 0;
 unsigned long switchStateCheckInterval = 250;
+unsigned long lastMQTTConnectTime = 0;
 
 DoubleResetDetector* drd;
 
 AsyncWebServer webServer(80);
 
 void setup() {
+  SPIFFS.begin(true); // Format spiffs if not formatted.
+
   Serial.begin(115200);
 
   neopixels.begin();
@@ -60,8 +64,6 @@ void setup() {
   pinMode(SWITCH_PIN, INPUT_PULLUP);
   pinMode(BUILTIN_LED_PIN, OUTPUT);
 
-  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-
   hostname =             "space-state-switch";
   mqttStateTopic =       "space-state-switch/state";
   mqttLastWillTopic =    "space-state-switch/LWT";
@@ -69,45 +71,48 @@ void setup() {
   readPreferences();
 
   setupWiFiManager();
+  
   setupHTTPServer();
 }
 
 void setupWiFiManager() {
+  
   wifiManager.addParameter(&paramMQTTServer);
   wifiManager.addParameter(&paramMQTTPort);
   wifiManager.addParameter(&paramMQTTUsername);
   wifiManager.addParameter(&paramMQTTPassword);
 
-  wifiManager.setConfigPortalBlocking(true); // Disable blocking so we can animate the display
   wifiManager.setConfigPortalTimeout(120);
+  wifiManager.setConfigPortalBlocking(true);
   wifiManager.setHostname(hostname);
   wifiManager.setSaveConfigCallback(saveConfigCallback);
-
-  wifiManager.setDebugOutput(true);
+  wifiManager.setConfigPortalTimeoutCallback(configModeTimeoutCallback);
+  wifiManager.setWiFiAutoReconnect(true);
+  wifiManager.setDebugOutput(false);
 
   if (drd->detectDoubleReset()) {
-    Serial.println("Double reset detected");
-    wifiManager.setConfigPortalTimeout(30);
-    wifiManager.setConfigPortalTimeoutCallback(configModeTimeoutCallback);
-    wifiManager.startConfigPortal(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
-    Serial.print("Config portal started, network password: ");
+    drd->stop();
+    Serial.print("Double reset detected, starting config portal with password: ");
     Serial.println(CONFIG_AP_PASSWORD);
-  } else if(wifiManager.autoConnect(CONFIG_AP_SSID, CONFIG_AP_PASSWORD)) {
+    wifiManager.startConfigPortal(CONFIG_AP_SSID, CONFIG_AP_PASSWORD);
+  } else {
+    Serial.print("If the switch fails to connect to the known network it with the following password: ");
+    Serial.println(CONFIG_AP_PASSWORD);
+  } 
+
+  if(wifiManager.autoConnect(CONFIG_AP_SSID, CONFIG_AP_PASSWORD)) {
     Serial.println("Connected...yaay :)");
     Serial.print("IP Address: ");
     Serial.print(WiFi.localIP());
     Serial.print(" MAC Address: ");
     Serial.println(WiFi.macAddress());
-    if (!MDNS.begin(hostname)) {
+    if (!MDNS.begin(hostname.c_str())) {
       Serial.println("Failed to start mDNS");
     }
     MDNS.addService("http", "tcp", 80);
     MDNS.addServiceTxt("http", "tcp", "id", WiFi.macAddress().c_str());
     MDNS.addServiceTxt("http", "tcp", "ma", WiFi.macAddress().c_str());
     MDNS.addServiceTxt("http", "tcp", "hw", "esp32");
-  } else {
-    Serial.print("Config portal started automatically, network password: ");
-    Serial.println(CONFIG_AP_PASSWORD);
   }
 }
 
@@ -177,14 +182,22 @@ void setupHTTPServer() {
 }
 
 void readPreferences() {
-  Serial.println("Reading preferenes");
+  Serial.println("Reading preferences");
 
-  preferences.begin(PREFERENCES_NAMESPACE, true);
+  if(!preferences.begin(PREFERENCES_NAMESPACE, true)) {
+    Serial.println("Failed to open read-only preferences");
+    if(!preferences.begin(PREFERENCES_NAMESPACE, false)) {
+      Serial.println("Failed to open write preferences");
+    }
+  }
 
   preferences.getString(PREFERENCE_MQTT_SERVER_KEY, mqttServer, 40);
   preferences.getString(PREFERENCE_MQTT_PORT_KEY, mqttPort, 6);
   preferences.getString(PREFERENCE_MQTT_USERNAME_KEY, mqttUsername, 34);
   preferences.getString(PREFERENCE_MQTT_PASSWORD_KEY, mqttPassword, 34);
+
+  Serial.print("MQTT Server: ");
+  Serial.println(mqttServer);
 
   if (atoi(mqttPort) <= 0) {
     strcpy(mqttPort, "1883");
@@ -259,8 +272,8 @@ void turnOff(){
 
 void loop() {
   drd->loop();
-  wifiManager.process();
-  MDNS.update();
+  mqttClient.loop();
+  connectMQTT();
 
   checkSwitchState();
 }
@@ -282,6 +295,7 @@ void checkSwitchState() {
       Serial.println("Closed!");
     }
     updateLEDs();
+    publishStateTopic(newSwitchState);
     return;
   }
   if (currentSwitchState == newSwitchState) {
@@ -289,13 +303,14 @@ void checkSwitchState() {
   }
   currentSwitchState = newSwitchState;
 
-  Serial.println("State has changed, new: ");
+  Serial.print("State has changed, new: ");
   if (newSwitchState) {
     Serial.println("Open!");
   } else {
     Serial.println("Closed!");
   }
   updateLEDs();
+  publishStateTopic(newSwitchState);
   if (newSwitchState) {
     turnOn();
   } else {
@@ -315,6 +330,86 @@ void updateLEDs() {
 
   neopixels.fill(neopixelColor);
   neopixels.show();
+}
+
+//
+// MARK: - MQTT
+//
+
+void connectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  if (mqttClient.connected()) {
+    return;
+  }
+  String mqttServerStr = String(mqttServer);
+  mqttServerStr.trim();
+  if (mqttServerStr.isEmpty()) {
+    return;
+  }
+  long now = millis();
+  if ((now - lastMQTTConnectTime) < MQTT_CONNECT_INTERVAL && lastMQTTConnectTime != 0) {
+    return;
+  }
+  int mqttPortInt = atoi(mqttPort);
+  if (mqttPortInt <= 0) {
+    mqttPortInt = 1883;
+  }
+  mqttClient.setServer(mqttServerStr.c_str(), mqttPortInt);
+  if (mqttClient.connect(hostname.c_str(), mqttUsername, mqttPassword, mqttLastWillTopic.c_str(), 0, true, "offline")) {
+    Serial.println("[MQTT]: Connected");
+    publishHADiscoveryTopic();
+    publishStateTopic(currentSwitchState);
+    mqttClient.publish(mqttLastWillTopic.c_str(), "online", true);
+  } else {
+    Serial.println("[MQTT]: Failed to connect");
+  }
+  lastMQTTConnectTime = now;
+  
+}
+
+void publishHADiscoveryTopic() {
+  String topic = "homeassistant/binary_sensor/" + hostname + "/config";
+
+  DynamicJsonDocument payload(512);
+  payload["dev_cla"] = "opening";
+  payload["stat_t"] = mqttStateTopic;
+  payload["pl_on"] = "1";
+  payload["pl_off"] = "0";
+  payload["uniq_id"] = hostname;
+  payload["name"] = "Space state";
+  payload["avty_t"] = mqttLastWillTopic;
+  payload["exp_aft"] = 900; // Seconds after which the sensor is deemed unresponsive.
+
+  JsonObject deviceObject = payload.createNestedObject("dev");
+  deviceObject["name"] = "Space state switch";
+  deviceObject["cu"] = String("http://") + WiFi.localIP().toString() + "/";
+  deviceObject["mdl"] = "ESP32";
+  deviceObject["mf"] = "renssies";
+
+  JsonArray ids = deviceObject.createNestedArray("ids");
+  ids.add(WiFi.macAddress());
+
+  char payloadBuffer[512];
+  serializeJson(payload, payloadBuffer);
+
+  mqttClient.setBufferSize(512); // The discovery payload is rather big so we temporarily increase the max size.
+  if(!mqttClient.publish(topic.c_str(), payloadBuffer, true)) {
+    Serial.println("[MQTT]: Failed to publish HA discovery");
+  } else {
+    Serial.println("[MQTT]: Published HA discovery");
+  }
+  mqttClient.setBufferSize(MQTT_MAX_PACKET_SIZE);
+}
+
+void publishStateTopic(bool state) {
+  if (!mqttClient.connected()) {
+    return;
+  }
+  if (!mqttClient.publish(mqttStateTopic.c_str(), String(state).c_str())) {
+    Serial.println("[MQTT]: Failed to publish state");
+  }
 }
 
 // 
