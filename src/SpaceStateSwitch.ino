@@ -120,6 +120,7 @@ void setupWiFiManager() {
     MDNS.addServiceTxt("http", "tcp", "id", WiFi.macAddress().c_str());
     MDNS.addServiceTxt("http", "tcp", "ma", WiFi.macAddress().c_str());
     MDNS.addServiceTxt("http", "tcp", "hw", "esp32");
+    updateLEDs();
   }
 }
 
@@ -326,8 +327,12 @@ void updateLEDs() {
   if (currentSwitchState) {
     neopixelColor = neopixels.Color(0, 255, 0); // Green
   }
+  if (WiFi.status() != WL_CONNECTED) {
+    neopixelColor = neopixels.Color(0, 0, 255); // Blue
+  }
 
   neopixels.fill(neopixelColor);
+  neopixels.setBrightness(100);
   neopixels.show();
 }
 

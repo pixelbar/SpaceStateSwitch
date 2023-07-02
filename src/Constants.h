@@ -10,7 +10,7 @@
 #define BUILTIN_LED_PIN 2
 
 // The number of Neopixels supported on the header
-#define NUMBER_OF_PIXELS 5
+#define NUMBER_OF_PIXELS 20
 
 // Needed for "DoubleResetDetector", telling it to use SPIFFS.
 #define ESP_DRD_USE_LITTLEFS    false
