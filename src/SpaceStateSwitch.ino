@@ -13,6 +13,7 @@
 #include <WiFiManager.h> 
 #include <PubSubClient.h>
 
+#include <AsyncHTTPRequest_Generic.h> 
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncJson.h>
@@ -43,6 +44,7 @@ String mqttLastWillTopic;
 
 bool hasDeterminedInitalState = false;
 bool currentSwitchState = false; // false == off/closed, true == on/open
+bool performingRequest = false;
 
 unsigned long lastSwitchStateCheck = 0;
 unsigned long switchStateCheckInterval = 250;
@@ -51,6 +53,7 @@ unsigned long lastMQTTConnectTime = 0;
 DoubleResetDetector* drd;
 
 AsyncWebServer webServer(80);
+AsyncHTTPRequest submitRequest;
 
 void setup() {
   SPIFFS.begin(true); // Format spiffs if not formatted.
@@ -74,6 +77,9 @@ void setup() {
   setupWiFiManager();
   
   setupHTTPServer();
+
+  submitRequest.setDebug(false);
+  submitRequest.onReadyStateChange(submitRequestCallback);
 }
 
 void setupWiFiManager() {
@@ -213,64 +219,6 @@ void readPreferences() {
 
 }
 
-void turnOn(){
-  Serial.print("[SWITCH] Turning state on\n");
-  WiFiClient client;
-  HTTPClient http;
-  Serial.print("[HTTP] begin...\n");
-
-  String url = "http://spacestate.pixelbar.nl:8080/togglestate.php?user=user&token=token&state=open"; // Replace user and token with real info
-  
-  if (http.begin(client, url)) {  // HTTP
-    Serial.println("[HTTP] Execute GET command...");
-    int httpCode = http.GET();    // start connection and send HTTP header
-    if (httpCode > 0) {           // httpCode will be negative on error
-      Serial.printf("[HTTP] GET... code: %d\n", httpCode); // HTTP header has been send and Server response header has been handled
-      
-      // file found at server
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        String payload = http.getString();
-        Serial.println(payload);
-      }
-    } else {
-      Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
-    }
-      
-    http.end();
-  } else {
-    Serial.printf("[HTTP] Unable to connect\n");
-  }
-}
-
-void turnOff(){
-  Serial.print("[SWITCH] Turning state off\n");
-  WiFiClient client;
-  HTTPClient http;
-  Serial.print("[HTTP] begin...\n");
-
-  String url = "http://spacestate.pixelbar.nl:8080/togglestate.php?user=user&token=token&state=closed";  // Replace user and token with real info
-  
-  if (http.begin(client, url)) {  // HTTP
-    Serial.println("[HTTP] Execute GET command...");
-    int httpCode = http.GET();    // start connection and send HTTP header
-    if (httpCode > 0) {           // httpCode will be negative on error
-      Serial.printf("[HTTP] GET... code: %d\n", httpCode); // HTTP header has been send and Server response header has been handled
-      
-      // file found at server
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        String payload = http.getString();
-        Serial.println(payload);
-      }
-    } else {
-      Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
-    }
-      
-    http.end();
-  } else {
-    Serial.printf("[HTTP] Unable to connect\n");
-  }
-}
-
 void loop() {
   drd->loop();
   mqttClient.loop();
@@ -312,10 +260,60 @@ void checkSwitchState() {
   }
   updateLEDs();
   publishStateTopic(newSwitchState);
-  if (newSwitchState) {
-    turnOn();
+  submitSpaceState(newSwitchState);
+}
+
+void submitSpaceState(bool state) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  static bool requestOpenResult;
+
+  if (submitRequest.readyState() != readyStateUnsent && submitRequest.readyState() != readyStateDone) {
+    Serial.println("Request is not ready, can't send request");
+    return;
+  }
+
+  String url = "http://spacestate.pixelbar.nl:8080/togglestate.php";
+  url += "?user=";
+  url += SPACESTATE_REQUEST_USERNAME;
+  url += "&token=";
+  url += SPACESTATE_REQUEST_TOKEN;
+  url += "&state=";
+  if (state) {
+    url += "open";
   } else {
-    turnOff();
+    url += "closed";
+  }
+
+  Serial.print("GETting URL: ");
+  Serial.println(url);
+
+  requestOpenResult = submitRequest.open("GET", url.c_str());
+
+  if (requestOpenResult) {
+    // Only send() if open() returns true, or crash
+    performingRequest = true;
+    submitRequest.send();
+    updateLEDs();
+  } else {
+    Serial.println(F("Can't send, badly formed request"));
+  }
+}
+
+void submitRequestCallback(void *optParm, AsyncHTTPRequest *request, int readyState) {
+  (void) optParm;
+
+  if (readyState == readyStateDone) {
+    performingRequest = false;
+    Serial.print("Response Code = ");
+    Serial.println(request->responseHTTPString());
+
+    if (request->responseHTTPcode() == 200) {
+      Serial.println("Response: ");
+      Serial.println(request->responseText());
+      Serial.println("**************************************");
+    }
   }
 }
 
