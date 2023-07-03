@@ -139,8 +139,12 @@ void setupHTTPServer() {
 
     JsonObject root = response->getRoot();
     root["is_open"] = currentSwitchState;
-    root["state"] = currentSwitchState;
-    root["is_overwritten"] = false;
+    if (currentSwitchState) {
+      root["state"] = "open";
+    } else {
+      root["state"] = "closed";
+    }
+    root["is_overwritten"] = "not_implemented_yet";
     root["physical_state"] = currentSwitchState;
     JsonArray array = root.createNestedArray("endpoints");
     array.add("GET /heap");
