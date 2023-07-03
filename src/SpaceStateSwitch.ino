@@ -336,7 +336,7 @@ void updateLEDs() {
   }
 
   neopixels.fill(neopixelColor);
-  neopixels.setBrightness(100);
+  neopixels.setBrightness(80);
   neopixels.show();
 }
 
