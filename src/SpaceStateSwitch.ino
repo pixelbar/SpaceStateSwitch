@@ -13,12 +13,14 @@
 #include <WiFiManager.h> 
 #include <PubSubClient.h>
 
-#include <AsyncHTTPRequest_Generic.h> 
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
+
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 
 char mqttServer[40];
 char mqttPort[6] = "1883";
@@ -47,13 +49,12 @@ bool currentSwitchState = false; // false == off/closed, true == on/open
 bool performingRequest = false;
 
 unsigned long lastSwitchStateCheck = 0;
-unsigned long switchStateCheckInterval = 250;
+unsigned long switchStateCheckInterval = 500;
 unsigned long lastMQTTConnectTime = 0;
 
 DoubleResetDetector* drd;
 
 AsyncWebServer webServer(80);
-AsyncHTTPRequest submitRequest;
 
 void setup() {
   SPIFFS.begin(true); // Format spiffs if not formatted.
@@ -77,9 +78,6 @@ void setup() {
   setupWiFiManager();
   
   setupHTTPServer();
-
-  submitRequest.setDebug(false);
-  submitRequest.onReadyStateChange(submitRequestCallback);
 }
 
 void setupWiFiManager() {
@@ -237,6 +235,7 @@ void checkSwitchState() {
   if ((now - lastSwitchStateCheck) <= switchStateCheckInterval) {
     return;
   }
+  Serial.println("Checking switch state");
   bool newSwitchState = digitalRead(SWITCH_PIN) == LOW;
   lastSwitchStateCheck = now;
   if (!hasDeterminedInitalState) {
@@ -269,57 +268,53 @@ void checkSwitchState() {
 }
 
 void submitSpaceState(bool state) {
+  xTaskCreate(submitSpaceStateTask, "SubmitSpaceState", 4000, (void *)state, 5, NULL);
+}
+
+void submitSpaceStateTask(void *pvState) {
+  bool state = (bool)pvState;
+
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  static bool requestOpenResult;
+  WiFiClientSecure *client = new WiFiClientSecure;
+  if (client) {
+    client->setCACert(isrg_root_x1_ca_pem);
+    HTTPClient httpsClient;
 
-  if (submitRequest.readyState() != readyStateUnsent && submitRequest.readyState() != readyStateDone) {
-    Serial.println("Request is not ready, can't send request");
-    return;
-  }
-
-  String url = "http://spacestate.pixelbar.nl:8080/togglestate.php";
-  url += "?user=";
-  url += SPACESTATE_REQUEST_USERNAME;
-  url += "&token=";
-  url += SPACESTATE_REQUEST_TOKEN;
-  url += "&state=";
-  if (state) {
-    url += "open";
-  } else {
-    url += "closed";
-  }
-
-  Serial.print("GETting URL: ");
-  Serial.println(url);
-
-  requestOpenResult = submitRequest.open("GET", url.c_str());
-
-  if (requestOpenResult) {
-    // Only send() if open() returns true, or crash
-    performingRequest = true;
-    submitRequest.send();
-    updateLEDs();
-  } else {
-    Serial.println(F("Can't send, badly formed request"));
-  }
-}
-
-void submitRequestCallback(void *optParm, AsyncHTTPRequest *request, int readyState) {
-  (void) optParm;
-
-  if (readyState == readyStateDone) {
-    performingRequest = false;
-    Serial.print("Response Code = ");
-    Serial.println(request->responseHTTPString());
-
-    if (request->responseHTTPcode() == 200) {
-      Serial.println("Response: ");
-      Serial.println(request->responseText());
-      Serial.println("**************************************");
+    String url = "https://spacestate.pixelbar.nl/togglestate.php";
+    url += "?user=";
+    url += SPACESTATE_REQUEST_USERNAME;
+    url += "&token=";
+    url += SPACESTATE_REQUEST_TOKEN;
+    url += "&state=";
+    if (state) {
+      url += "open";
+    } else {
+      url += "closed";
     }
+
+    if (httpsClient.begin(*client, url)) {  // HTTPS
+      Serial.print("GETting URL: ");
+      Serial.println(url);
+      performingRequest = true;
+      updateLEDs();
+      int httpCode = httpsClient.GET();
+      if (httpCode > 0) {
+        Serial.printf("Response code: %d\n", httpCode);
+        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+          String payload = httpsClient.getString();
+          Serial.println(payload);
+        }
+      } else {
+        Serial.printf("Failed to perform GET request, error: %s\n", httpsClient.errorToString(httpCode).c_str());
+      }
+      httpsClient.end();
+    }
+  } else {
+    Serial.println("Malformed request");
   }
+  vTaskDelete(NULL);
 }
 
 void updateLEDs() {
