@@ -44,9 +44,11 @@ String hostname;
 String mqttStateTopic;
 String mqttLastWillTopic;
 
+bool currentSpaceState = false;  // false == off/closed, true == on/open
 bool hasDeterminedInitalState = false;
 bool currentSwitchState = false; // false == off/closed, true == on/open
 bool performingRequest = false;
+bool shouldSubmitCurrentSwitchState = false;
 
 unsigned long lastSwitchStateCheck = 0;
 unsigned long switchStateCheckInterval = 500;
@@ -78,6 +80,9 @@ void setup() {
   setupWiFiManager();
   
   setupHTTPServer();
+
+  xTaskCreate(checkSpaceStateTask, "CheckSpaceState", 6000, NULL, 5, NULL);
+  xTaskCreate(submitSpaceStateTask, "SubmitSpaceState", 6000, NULL, 5, NULL);
 }
 
 void setupWiFiManager() {
@@ -136,13 +141,9 @@ void setupHTTPServer() {
     response->addHeader("X-Server","ESP Async Web Server");
 
     JsonObject root = response->getRoot();
-    root["is_open"] = currentSwitchState;
-    if (currentSwitchState) {
-      root["state"] = "open";
-    } else {
-      root["state"] = "closed";
-    }
-    root["is_overwritten"] = "not_implemented_yet";
+    root["is_open"] = currentSpaceState;
+    root["state"] = stringForState(currentSpaceState);
+    root["is_overwritten"] = currentSpaceState != currentSwitchState;
     root["physical_state"] = currentSwitchState;
     JsonArray array = root.createNestedArray("endpoints");
     array.add("GET /heap");
@@ -235,52 +236,46 @@ void checkSwitchState() {
   if ((now - lastSwitchStateCheck) <= switchStateCheckInterval) {
     return;
   }
-  Serial.println("Checking switch state");
+  Serial.print("Free heep: ");
+  Serial.println(ESP.getFreeHeap());
   bool newSwitchState = digitalRead(SWITCH_PIN) == LOW;
   lastSwitchStateCheck = now;
   if (!hasDeterminedInitalState) {
+    currentSpaceState = newSwitchState;
     currentSwitchState = newSwitchState;
     hasDeterminedInitalState = true;
+    
     Serial.print("Determined original state: ");
-    if (newSwitchState) {
-      Serial.println("Open!");
-    } else {
-      Serial.println("Closed!");
-    }
-    updateLEDs();
-    publishStateTopic(newSwitchState);
+    Serial.println(stringForState(newSwitchState));
+    spaceStateDidChange(newSwitchState, !newSwitchState);
     return;
   }
   if (currentSwitchState == newSwitchState) {
     return;
   }
   currentSwitchState = newSwitchState;
+  currentSpaceState = newSwitchState;
 
-  Serial.print("State has changed, new: ");
-  if (newSwitchState) {
-    Serial.println("Open!");
-  } else {
-    Serial.println("Closed!");
-  }
-  updateLEDs();
-  publishStateTopic(newSwitchState);
-  submitSpaceState(newSwitchState);
+  spaceStateDidChange(newSwitchState, !newSwitchState);
+  shouldSubmitCurrentSwitchState = true;
 }
 
-void submitSpaceState(bool state) {
-  xTaskCreate(submitSpaceStateTask, "SubmitSpaceState", 4000, (void *)state, 5, NULL);
-}
-
-void submitSpaceStateTask(void *pvState) {
-  bool state = (bool)pvState;
-
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
+void submitSpaceStateTask(void *param) {
   WiFiClientSecure *client = new WiFiClientSecure;
-  if (client) {
-    client->setCACert(isrg_root_x1_ca_pem);
-    HTTPClient httpsClient;
+  client->setCACert(isrg_root_x1_ca_pem);
+  while(true) {
+    vTaskDelay(portTICK_PERIOD_MS * 200);
+    if (!shouldSubmitCurrentSwitchState) {
+      continue;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      continue;
+    }
+    if (!client) {
+      Serial.println("Failed to create secure client");
+      client->stop();
+      continue;
+    }
 
     String url = "https://spacestate.pixelbar.nl/togglestate.php";
     url += "?user=";
@@ -288,42 +283,125 @@ void submitSpaceStateTask(void *pvState) {
     url += "&token=";
     url += SPACESTATE_REQUEST_TOKEN;
     url += "&state=";
-    if (state) {
-      url += "open";
-    } else {
-      url += "closed";
+    url += stringForState(currentSwitchState);
+
+    HTTPClient httpsClient;
+    httpsClient.useHTTP10(true);
+    if (!httpsClient.begin(*client, url)) {  // HTTPS
+      Serial.println("Malformed request");
+      httpsClient.end();
+      client->stop();
+      continue;
+    }
+    Serial.print("GETting URL: ");
+    Serial.println(url);
+    performingRequest = true;
+    updateLEDs();
+    int httpCode = httpsClient.GET();
+    if (httpCode <= 0) {
+      httpsClient.end();
+      client->stop();
+      Serial.printf("Failed to perform submit GET request, error: %s\n", httpsClient.errorToString(httpCode).c_str());
+      performingRequest = false;
+      continue;
+    }
+    Serial.printf("Submit space state response code: %d\n", httpCode);
+    if (httpCode >= 200 && httpCode < 400) {
+      shouldSubmitCurrentSwitchState = false;
+    }
+    performingRequest = false;
+    httpsClient.end();
+    client->stop();
+    
+  }
+}
+
+void checkSpaceStateTask(void *param) {
+  WiFiClientSecure *client = new WiFiClientSecure;
+  client->setCACert(isrg_root_x1_ca_pem);
+  while(true) {
+    vTaskDelay(portTICK_PERIOD_MS * 2000);
+    if (performingRequest) {
+      continue;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      continue;
+    }
+    if (!client) {
+      Serial.println("Failed to create secure client");
+      client->stop();
+      continue;
     }
 
-    if (httpsClient.begin(*client, url)) {  // HTTPS
-      Serial.print("GETting URL: ");
-      Serial.println(url);
-      performingRequest = true;
-      updateLEDs();
-      int httpCode = httpsClient.GET();
-      if (httpCode > 0) {
-        Serial.printf("Response code: %d\n", httpCode);
-        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-          String payload = httpsClient.getString();
-          Serial.println(payload);
+    const char url[46] = "https://spacestate.pixelbar.nl/spacestate.php";
+
+    HTTPClient httpsClient;
+    httpsClient.useHTTP10(true);
+    if (!httpsClient.begin(*client, url)) {  // HTTPS
+      Serial.println("Malformed request");
+      httpsClient.end();
+      client->stop();
+      continue;
+    }
+    Serial.print("GETting URL: ");
+    Serial.println(url);
+    updateLEDs();
+    int httpCode = httpsClient.GET();
+    if (httpCode <= 0) {
+      httpsClient.end();
+      client->stop();
+      Serial.printf("Failed to perform GET request, error: %s\n", httpsClient.errorToString(httpCode).c_str());
+      continue;
+    }
+    Serial.printf("Response code: %d\n", httpCode);
+    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+      DynamicJsonDocument doc(128);
+      DeserializationError error = deserializeJson(doc, httpsClient.getStream());
+      if (error.code() == error.Ok && doc.containsKey("state") && doc["state"].is<String>()) {
+        String stateString = doc["state"].as<String>();
+        bool onlineSpaceState = stateString.equals("open");
+        if (onlineSpaceState != currentSpaceState) {
+          Serial.println("An space state overwrite was detected");
+          currentSpaceState = onlineSpaceState;
+          spaceStateDidChange(onlineSpaceState, !onlineSpaceState);
         }
       } else {
-        Serial.printf("Failed to perform GET request, error: %s\n", httpsClient.errorToString(httpCode).c_str());
+        Serial.print("Unsupported response from space state");
+        Serial.println(httpsClient.getString());
       }
-      httpsClient.end();
+      doc.clear();
     }
-  } else {
-    Serial.println("Malformed request");
+    httpsClient.end();
+    client->stop();
   }
-  vTaskDelete(NULL);
+}
+
+void spaceStateDidChange(bool newState, bool oldState) {
+  currentSpaceState = newState;
+  Serial.print("Space state has changed to: '");
+  Serial.print(stringForState(newState));
+  Serial.print("', previous: '");
+  Serial.print(stringForState(oldState));
+  Serial.println("'");
+  updateLEDs();
+  publishStateTopic(newState);
+}
+
+String stringForState(bool state) {
+  if (state) {
+    return "open";
+  } else {
+    return "closed";
+  }
 }
 
 void updateLEDs() {
-  int ledState = currentSwitchState ? HIGH : LOW;
+  int ledState = currentSpaceState ? HIGH : LOW;
   digitalWrite(BUILTIN_LED_PIN, ledState);
 
   uint32_t neopixelColor = neopixels.Color(255, 0, 0); // Red
 
-  if (currentSwitchState) {
+  if (currentSpaceState) {
     neopixelColor = neopixels.Color(0, 255, 0); // Green
   }
   if (WiFi.status() != WL_CONNECTED) {
@@ -362,14 +440,13 @@ void connectMQTT() {
   mqttClient.setServer(mqttServerStr.c_str(), mqttPortInt);
   if (mqttClient.connect(hostname.c_str(), mqttUsername, mqttPassword, mqttLastWillTopic.c_str(), 0, true, "offline")) {
     Serial.println("[MQTT]: Connected");
-    publishHADiscoveryTopic();
-    publishStateTopic(currentSwitchState);
     mqttClient.publish(mqttLastWillTopic.c_str(), "online", true);
+    publishHADiscoveryTopic();
+    publishStateTopic(currentSpaceState);
   } else {
     Serial.println("[MQTT]: Failed to connect");
   }
   lastMQTTConnectTime = now;
-  
 }
 
 void publishHADiscoveryTopic() {
