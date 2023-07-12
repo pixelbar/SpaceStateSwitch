@@ -51,7 +51,6 @@ bool performingRequest = false;
 bool shouldSubmitCurrentSwitchState = false;
 
 unsigned long lastSwitchStateCheck = 0;
-unsigned long switchStateCheckInterval = 500;
 unsigned long lastMQTTConnectTime = 0;
 
 DoubleResetDetector* drd;
@@ -233,11 +232,9 @@ void loop() {
 
 void checkSwitchState() {
   unsigned long now = millis();
-  if ((now - lastSwitchStateCheck) <= switchStateCheckInterval) {
+  if ((now - lastSwitchStateCheck) <= SWITCH_STATE_INTERVAL) {
     return;
   }
-  Serial.print("Free heep: ");
-  Serial.println(ESP.getFreeHeap());
   bool newSwitchState = digitalRead(SWITCH_PIN) == LOW;
   lastSwitchStateCheck = now;
   if (!hasDeterminedInitalState) {
@@ -319,8 +316,11 @@ void submitSpaceStateTask(void *param) {
 void checkSpaceStateTask(void *param) {
   WiFiClientSecure *client = new WiFiClientSecure;
   client->setCACert(isrg_root_x1_ca_pem);
+  bool hasPerformedFirstCheck = false;
   while(true) {
-    vTaskDelay(portTICK_PERIOD_MS * 2000);
+    if (hasPerformedFirstCheck) {
+      vTaskDelay(portTICK_PERIOD_MS * SPACE_STATE_CHECK_INTERVAL);
+    }
     if (performingRequest) {
       continue;
     }
@@ -332,6 +332,7 @@ void checkSpaceStateTask(void *param) {
       client->stop();
       continue;
     }
+    hasPerformedFirstCheck = true;
 
     const char url[46] = "https://spacestate.pixelbar.nl/spacestate.php";
 

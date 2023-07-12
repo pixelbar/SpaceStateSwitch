@@ -19,13 +19,19 @@
 
 // Number of seconds after reset during which a 
 // subsequent reset will be considered a double reset.
-#define DRD_TIMEOUT 10
+#define DRD_TIMEOUT 5
 
 // RTC Memory Address for the DoubleResetDetector to use. Required, but not used on the ESP32
 #define DRD_ADDRESS 0
 
 // The minimum interval between MQTT connection attempts
 #define MQTT_CONNECT_INTERVAL 10000 // miliseconds
+
+// The interval between checks for the space state if it has been overwritten.
+#define SPACE_STATE_CHECK_INTERVAL 10 * 60 * 1000 // 10 minutes in miliseconds.
+
+// The interval between checks for switch state changes.
+#define SWITCH_STATE_INTERVAL 250 // milliseconds
 
 // The network SSID for the config portal.
 #define CONFIG_AP_SSID "space-state-switch"
