@@ -1,0 +1,92 @@
+# Builds, signs and publishes firmware when a version tag (e.g. v1.2.3) is pushed.
+# Devices install the newest release's firmware.bin automatically on boot.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # Create the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release # Optional: add required reviewers to gate signing
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Validate tag
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must look like v1.2.3 (got '$TAG')"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Needed to find the previous release's public key
+
+      - name: Check signing setup
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          if [[ ! -s keys/ota_signing_key.pub.pem ]]; then
+            echo "::error::keys/ota_signing_key.pub.pem is empty, run scripts/generate-ota-signing-key.sh (see README)"
+            exit 1
+          fi
+          if [[ -z "$OTA_SIGNING_KEY" ]]; then
+            echo "::error::The OTA_SIGNING_KEY secret is not set (see README)"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install tools
+        run: pip install platformio cryptography
+
+      - name: Build
+        run: FIRMWARE_VERSION="$TAG" pio run
+
+      - name: Sign
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          signer=~/.platformio/packages/framework-arduinoespressif32/tools/bin_signing.py
+          key="$RUNNER_TEMP/ota_signing_key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$OTA_SIGNING_KEY" > "$key")
+
+          mkdir -p dist
+          python "$signer" --bin .pio/build/SpaceStateSwitch/firmware.bin --key "$key" --out dist/firmware.bin
+
+          # Make sure devices will accept it. Devices check against the key in the firmware
+          # they're running, i.e. the previous release's key (which differs during rotation).
+          trusted_key="$RUNNER_TEMP/trusted_key.pub.pem"
+          previous_tag=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+          if [[ -n "$previous_tag" ]] && git show "$previous_tag:keys/ota_signing_key.pub.pem" > "$trusted_key" 2>/dev/null && [[ -s "$trusted_key" ]]; then
+            echo "Verifying against the public key of $previous_tag"
+          else
+            echo "Verifying against the committed public key"
+            cp keys/ota_signing_key.pub.pem "$trusted_key"
+          fi
+          python "$signer" --verify dist/firmware.bin --pubkey "$trusted_key" | tee verify.log
+          grep -q "SUCCESSFUL" verify.log
+
+          # The device checks the signed image really contains this version.
+          grep -qaF $'\x1f'"SSS-FW-VERSION:${TAG#v}"$'\x1f' dist/firmware.bin
+
+          (cd dist && sha256sum firmware.bin > firmware.bin.sha256)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" dist/firmware.bin dist/firmware.bin.sha256 --verify-tag --generate-notes --title "$TAG"
