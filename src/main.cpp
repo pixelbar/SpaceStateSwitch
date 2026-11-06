@@ -286,10 +286,12 @@ void setup() {
   setupWiFi(doubleReset.detect());
   renderLeds();
 
-  checkForUpdate();
-
   // We got this far (connected to WiFi), so a freshly installed update works.
+  // Mark it valid before checking for a new update, so the OTA check can't cause
+  // a rollback if it fails or crashes.
   ota::markFirmwareValid();
+
+  checkForUpdate();
 
   setupMdns();
   setupWebServer();
