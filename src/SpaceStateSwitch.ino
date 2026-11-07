@@ -259,7 +259,7 @@ void checkSwitchState() {
 
 void submitSpaceStateTask(void *param) {
   WiFiClientSecure *client = new WiFiClientSecure;
-  client->setCACert(isrg_root_x1_ca_pem);
+  client->setCACert(digicert_global_root_g2_ca_pem);
   while(true) {
     vTaskDelay(portTICK_PERIOD_MS * 200);
     if (!shouldSubmitCurrentSwitchState) {
@@ -315,7 +315,7 @@ void submitSpaceStateTask(void *param) {
 
 void checkSpaceStateTask(void *param) {
   WiFiClientSecure *client = new WiFiClientSecure;
-  client->setCACert(isrg_root_x1_ca_pem);
+  client->setCACert(digicert_global_root_g2_ca_pem);
   bool hasPerformedFirstCheck = false;
   while(true) {
     if (hasPerformedFirstCheck) {
