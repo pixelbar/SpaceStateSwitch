@@ -53,7 +53,7 @@ void MqttPublisher::publishState(bool open) {
     return;
   }
   // Non-blocking: queued in the client's outbox and sent by the MQTT task.
-  esp_mqtt_client_enqueue(client_, config::kMqttStateTopic, open ? kPayloadOpen : kPayloadClosed, 0, 0, 0, true);
+  esp_mqtt_client_enqueue(client_, config::kMqttStateTopic, open ? kPayloadOpen : kPayloadClosed, 0, 0, 1, true);
 }
 
 void MqttPublisher::onEvent(void *arg, const char *base, int32_t eventId, void *eventData) {
