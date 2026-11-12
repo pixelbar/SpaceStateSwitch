@@ -4,3 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 /src/Secrets.h
+
+# OTA signing private keys must never be committed (the public key in keys/ is fine)
+*.pem
+!keys/*.pub.pem
