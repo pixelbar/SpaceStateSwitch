@@ -135,7 +135,7 @@ bool SpaceStateSync::fetchState(bool &open) {
   HTTPClient http;
   http.setConnectTimeout(config::kHttpTimeoutMs);
   http.setTimeout(config::kHttpTimeoutMs);
-  http.useHTTP10(true);  // No chunked encoding, so we can parse straight from the stream
+  // The server rejects HTTP/1.0 with 426 Upgrade Required, so stay on HTTP/1.1.
   if (!http.begin(client, config::kSpaceStateUrl)) {
     Serial.println("[SpaceState] Invalid state URL");
     return false;
@@ -149,7 +149,8 @@ bool SpaceStateSync::fetchState(bool &open) {
   }
 
   JsonDocument doc;
-  const DeserializationError error = deserializeJson(doc, http.getStream());
+  // getString() decodes chunked transfer encoding; the response is tiny.
+  const DeserializationError error = deserializeJson(doc, http.getString());
   http.end();
 
   const char *state = doc["state"];
