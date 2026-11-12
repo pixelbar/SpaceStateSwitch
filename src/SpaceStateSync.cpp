@@ -9,35 +9,18 @@
 
 namespace {
 
-String urlEncode(const String &value) {
-  static const char *kHex = "0123456789ABCDEF";
-  String out;
-  out.reserve(value.length() * 3);
-  for (size_t i = 0; i < value.length(); i++) {
-    const char c = value[i];
-    if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
-      out += c;
-    } else {
-      out += '%';
-      out += kHex[(c >> 4) & 0xF];
-      out += kHex[c & 0xF];
-    }
-  }
-  return out;
-}
-
 const char *stateName(bool open) {
   return open ? "open" : "closed";
 }
 
 }  // namespace
 
-void SpaceStateSync::begin(const String &username, const String &token, OverrideCallback onOverride) {
-  username_ = username;
-  token_ = token;
+void SpaceStateSync::begin(const String &user, const String &apiKey, OverrideCallback onOverride) {
+  user_ = user.isEmpty() ? String(config::kHostname) : user;
+  apiKey_ = apiKey;
   onOverride_ = onOverride;
-  if (username_.isEmpty() || token_.isEmpty()) {
-    Serial.println("[SpaceState] No credentials configured, changes won't be submitted");
+  if (apiKey_.isEmpty()) {
+    Serial.println("[SpaceState] No API key configured, changes won't be submitted");
   }
   xTaskCreate(&SpaceStateSync::taskEntry, "SpaceStateSync", 8192, this, 1, &task_);
 }
@@ -98,34 +81,57 @@ void SpaceStateSync::run() {
 }
 
 bool SpaceStateSync::submitState(bool open) {
-  if (username_.isEmpty() || token_.isEmpty()) {
+  if (apiKey_.isEmpty()) {
     return true;  // Nothing we can do; don't retry forever.
   }
+
+  JsonDocument body;
+  body["state"] = stateName(open);
+  body["user"] = user_;
+  body["method"] = config::kSpaceStateMethod;
+  String payload;
+  serializeJson(body, payload);
 
   NetworkClientSecure client;
   client.useBuiltinCACertBundle();
 
-  const String url = String(config::kToggleStateUrl) + "?user=" + urlEncode(username_) + "&token=" + urlEncode(token_) +
-                     "&state=" + stateName(open);
-
   HTTPClient http;
   http.setConnectTimeout(config::kHttpTimeoutMs);
   http.setTimeout(config::kHttpTimeoutMs);
-  if (!http.begin(client, url)) {
-    Serial.println("[SpaceState] Invalid submit URL");
+  if (!http.begin(client, config::kSpaceStateApiUrl)) {
+    Serial.println("[SpaceState] Invalid state URL");
     return false;
   }
-  // Don't log the URL, it contains the token.
+  http.addHeader("Authorization", "Bearer " + apiKey_);
+  http.addHeader("Content-Type", "application/json");
+
   Serial.printf("[SpaceState] Submitting '%s'\n", stateName(open));
-  const int status = http.GET();
+  const int status = http.POST(payload);
+  const String response = status > 0 ? http.getString() : String();
   http.end();
 
-  if (status <= 0) {
-    Serial.printf("[SpaceState] Submit failed: %s\n", HTTPClient::errorToString(status).c_str());
-    return false;
+  switch (status) {
+    case HTTP_CODE_OK:
+      Serial.println("[SpaceState] State changed");
+      return true;
+    case HTTP_CODE_CONFLICT:  // The space was already in this state; nothing to do.
+      Serial.println("[SpaceState] Already in that state");
+      return true;
+    case HTTP_CODE_UNAUTHORIZED:
+      // Retrying won't help until the key is changed in the config portal.
+      Serial.println("[SpaceState] Submit rejected: API key missing, invalid or not 'write'");
+      return true;
+    case HTTP_CODE_BAD_REQUEST:
+      Serial.printf("[SpaceState] Submit rejected as invalid: %s\n", response.c_str());
+      return true;
+    default:
+      if (status <= 0) {
+        Serial.printf("[SpaceState] Submit failed: %s\n", HTTPClient::errorToString(status).c_str());
+      } else {
+        Serial.printf("[SpaceState] Submit failed: %d %s\n", status, response.c_str());
+      }
+      return false;  // Network or server error: retry.
   }
-  Serial.printf("[SpaceState] Submit response: %d\n", status);
-  return status >= 200 && status < 400;
 }
 
 bool SpaceStateSync::fetchState(bool &open) {
@@ -135,14 +141,13 @@ bool SpaceStateSync::fetchState(bool &open) {
   HTTPClient http;
   http.setConnectTimeout(config::kHttpTimeoutMs);
   http.setTimeout(config::kHttpTimeoutMs);
-  // The server rejects HTTP/1.0 with 426 Upgrade Required, so stay on HTTP/1.1.
-  if (!http.begin(client, config::kSpaceStateUrl)) {
+  if (!http.begin(client, config::kSpaceStateApiUrl)) {
     Serial.println("[SpaceState] Invalid state URL");
     return false;
   }
 
   const int status = http.GET();
-  if (status != HTTP_CODE_OK && status != HTTP_CODE_MOVED_PERMANENTLY) {
+  if (status != HTTP_CODE_OK) {
     Serial.printf("[SpaceState] Fetch failed: %d %s\n", status, status < 0 ? HTTPClient::errorToString(status).c_str() : "");
     http.end();
     return false;

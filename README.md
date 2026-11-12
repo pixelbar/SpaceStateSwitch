@@ -13,9 +13,9 @@ Code created by DiverAlpha, referencing the old code of royvandongen.
 | Blue | Not connected to WiFi |
 | Purple (blinking) | Installing a firmware update |
 
-- If the switch changes, the new state is sent to the space state website. Failed submissions are retried every 10 seconds.
+- If the switch changes, the new state is sent to the [space state API](https://pixelbar.nl/spacestate/) (`POST /api/v1/state`). Network and server errors are retried every 10 seconds; a rejected API key is logged and not retried.
 - Every 10 minutes the online state is fetched. If someone changed the state on the website, that override is shown until the switch is flipped again.
-- **Double press reset** to open the config portal. It runs as WiFi network `space-state-switch` with password `1337hacker` and closes after 2 minutes. In the portal you set the WiFi network, the MQTT broker and the space state API credentials. Password and token fields start empty; leave them empty to keep the stored value.
+- **Double press reset** to open the config portal. It runs as WiFi network `space-state-switch` with password `1337hacker` and closes after 2 minutes. In the portal you set the WiFi network, the MQTT broker and the space state API key (an API key with the `write` role) and user. Password and API key fields start empty; leave them empty to keep the stored value.
 
 ### HTTP API
 
@@ -48,6 +48,8 @@ Local builds report version `dev` and **never update themselves**, so a build yo
 The partition table changed to make room for two OTA slots, and partition tables can't be changed over the air. Flash the first version of this firmware **over USB** with `pio run -t upload`. WiFi and MQTT settings are kept.
 
 Space state credentials are no longer compiled in. Enter them in the config portal, or put them in `src/Secrets.h` (see `src/Secrets_example.h`) for that first USB flash. They are then stored on the device.
+
+The switch uses the new space state API with a Bearer API key, not the legacy `togglestate.php` token. A device that already has a legacy token stored still needs an API key with the `write` role: ask a spacestate maintainer for one and enter it in the config portal. The stored user is kept.
 
 ## OTA updates
 

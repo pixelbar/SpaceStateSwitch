@@ -48,8 +48,11 @@ constexpr const char *kPreferencesNamespace = "space-state";
 
 // MARK: - Space state API
 
-constexpr const char *kSpaceStateUrl = "https://spacestate.pixelbar.nl/spacestate.php";
-constexpr const char *kToggleStateUrl = "https://spacestate.pixelbar.nl/togglestate.php";
+// GET returns the current state; POST (with a `write` API key) changes it.
+// See https://pixelbar.nl/spacestate/
+constexpr const char *kSpaceStateApiUrl = "https://spacestate.pixelbar.nl/api/v1/state";
+// Reported to the API as the `method` of a state change.
+constexpr const char *kSpaceStateMethod = "button";
 
 // MARK: - MQTT
 

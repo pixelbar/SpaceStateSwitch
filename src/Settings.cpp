@@ -15,8 +15,10 @@ constexpr const char *kKeyMqttServer = "mqtt_server";
 constexpr const char *kKeyMqttPort = "mqtt_port";
 constexpr const char *kKeyMqttUsername = "mqtt_username";
 constexpr const char *kKeyMqttPassword = "mqtt_password";
-constexpr const char *kKeySpaceStateUsername = "ss_username";
-constexpr const char *kKeySpaceStateToken = "ss_token";
+// The user is shared with the old legacy-API firmware. The API key gets its own key:
+// the legacy token stored under "ss_token" is not a valid API key.
+constexpr const char *kKeySpaceStateUser = "ss_username";
+constexpr const char *kKeySpaceStateApiKey = "ss_api_key";
 }  // namespace
 
 void Settings::load() {
@@ -36,15 +38,19 @@ void Settings::load() {
   }
   mqttUsername = prefs.getString(kKeyMqttUsername, "");
   mqttPassword = prefs.getString(kKeyMqttPassword, "");
-  spaceStateUsername = prefs.getString(kKeySpaceStateUsername, "");
-  spaceStateToken = prefs.getString(kKeySpaceStateToken, "");
+  spaceStateUser = prefs.getString(kKeySpaceStateUser, "");
+  spaceStateApiKey = prefs.getString(kKeySpaceStateApiKey, "");
   prefs.end();
 
-#if defined(SPACESTATE_REQUEST_USERNAME) && defined(SPACESTATE_REQUEST_TOKEN)
-  if (!hasSpaceStateCredentials()) {
-    Serial.println("[Settings] Migrating space state credentials from Secrets.h to NVS");
-    spaceStateUsername = SPACESTATE_REQUEST_USERNAME;
-    spaceStateToken = SPACESTATE_REQUEST_TOKEN;
+#ifdef SPACESTATE_API_KEY
+  if (!hasSpaceStateApiKey()) {
+    Serial.println("[Settings] Migrating space state API key from Secrets.h to NVS");
+    spaceStateApiKey = SPACESTATE_API_KEY;
+#ifdef SPACESTATE_USER
+    if (spaceStateUser.isEmpty()) {
+      spaceStateUser = SPACESTATE_USER;
+    }
+#endif
     save();
   }
 #endif
@@ -60,7 +66,7 @@ void Settings::save() const {
   prefs.putString(kKeyMqttPort, String(mqttPort));
   prefs.putString(kKeyMqttUsername, mqttUsername);
   prefs.putString(kKeyMqttPassword, mqttPassword);
-  prefs.putString(kKeySpaceStateUsername, spaceStateUsername);
-  prefs.putString(kKeySpaceStateToken, spaceStateToken);
+  prefs.putString(kKeySpaceStateUser, spaceStateUser);
+  prefs.putString(kKeySpaceStateApiKey, spaceStateApiKey);
   prefs.end();
 }

@@ -71,7 +71,17 @@ void renderLeds() {
 
 // MARK: - Space state
 
+#ifdef DEV_BUILD
+// Set from the serial console to simulate the switch: -1 = use the physical switch.
+int8_t simulatedSwitch = -1;
+#endif
+
 bool readSwitch() {
+#ifdef DEV_BUILD
+  if (simulatedSwitch >= 0) {
+    return simulatedSwitch == 1;
+  }
+#endif
   return digitalRead(config::kSwitchPin) == LOW;
 }
 
@@ -100,6 +110,34 @@ void pollSwitch() {
   spaceStateSync.submit(open);
 }
 
+#ifdef DEV_BUILD
+// Development builds only: simulate the switch from the serial monitor.
+//   o = open, c = closed, p = back to the physical switch
+// The simulated position goes through pollSwitch() exactly like a real one,
+// so it is also submitted to the space state API and MQTT.
+void pollSerialCommands() {
+  while (Serial.available() > 0) {
+    switch (Serial.read()) {
+      case 'o':
+        simulatedSwitch = 1;
+        Serial.println("[Dev] Simulating switch: open");
+        break;
+      case 'c':
+        simulatedSwitch = 0;
+        Serial.println("[Dev] Simulating switch: closed");
+        break;
+      case 'p':
+        simulatedSwitch = -1;
+        Serial.println("[Dev] Using the physical switch");
+        break;
+      default:
+        continue;
+    }
+    lastSwitchPollAt = millis() - config::kSwitchPollIntervalMs;  // Apply on this loop
+  }
+}
+#endif
+
 // Called from the sync task when the website reports a different state.
 void onOnlineState(bool open) {
   if (open != spaceOpen) {
@@ -116,15 +154,15 @@ void setupWiFi(bool forcePortal) {
   static WiFiManagerParameter mqttPort("mqtt_port", "MQTT port", String(settings.mqttPort).c_str(), 5, " type='number' min='1' max='65535'");
   static WiFiManagerParameter mqttUsername("mqtt_username", "MQTT username (blank if unauthenticated)", settings.mqttUsername.c_str(), 64, " autocapitalize='none'");
   static WiFiManagerParameter mqttPassword("mqtt_password", "MQTT password (blank keeps current)", "", 64, " type='password'");
-  static WiFiManagerParameter spaceStateUsername("ss_username", "Space state API user", settings.spaceStateUsername.c_str(), 64, " autocapitalize='none'");
-  static WiFiManagerParameter spaceStateToken("ss_token", "Space state API token (blank keeps current)", "", 128, " type='password'");
+  static WiFiManagerParameter spaceStateUser("ss_user", "Space state user (blank uses the hostname)", settings.spaceStateUser.c_str(), 64, " autocapitalize='none'");
+  static WiFiManagerParameter spaceStateApiKey("ss_api_key", "Space state API key (blank keeps current)", "", 128, " type='password'");
 
   wifiManager.addParameter(&mqttServer);
   wifiManager.addParameter(&mqttPort);
   wifiManager.addParameter(&mqttUsername);
   wifiManager.addParameter(&mqttPassword);
-  wifiManager.addParameter(&spaceStateUsername);
-  wifiManager.addParameter(&spaceStateToken);
+  wifiManager.addParameter(&spaceStateUser);
+  wifiManager.addParameter(&spaceStateApiKey);
 
   wifiManager.setSaveParamsCallback([]() {
     settings.mqttServer = mqttServer.getValue();
@@ -135,9 +173,11 @@ void setupWiFi(bool forcePortal) {
     if (strlen(mqttPassword.getValue()) > 0 || settings.mqttUsername.isEmpty()) {
       settings.mqttPassword = mqttPassword.getValue();
     }
-    settings.spaceStateUsername = spaceStateUsername.getValue();
-    if (strlen(spaceStateToken.getValue()) > 0) {
-      settings.spaceStateToken = spaceStateToken.getValue();
+    settings.spaceStateUser = spaceStateUser.getValue();
+    settings.spaceStateUser.trim();
+    if (strlen(spaceStateApiKey.getValue()) > 0) {
+      settings.spaceStateApiKey = spaceStateApiKey.getValue();
+      settings.spaceStateApiKey.trim();
     }
     settings.save();
     Serial.println("Settings saved");
@@ -270,6 +310,9 @@ void checkForUpdate() {
 void setup() {
   Serial.begin(115200);
   Serial.printf("\nSpaceStateSwitch %s\n", FIRMWARE_VERSION);
+#ifdef DEV_BUILD
+  Serial.println("[Dev] Serial commands: o = open, c = closed, p = physical switch");
+#endif
 
   pinMode(config::kSwitchPin, INPUT_PULLUP);
   pinMode(config::kBuiltinLedPin, OUTPUT);
@@ -296,11 +339,14 @@ void setup() {
   setupMdns();
   setupWebServer();
   mqtt.begin(settings, []() -> bool { return spaceOpen; });
-  spaceStateSync.begin(settings.spaceStateUsername, settings.spaceStateToken, onOnlineState);
+  spaceStateSync.begin(settings.spaceStateUser, settings.spaceStateApiKey, onOnlineState);
 }
 
 void loop() {
   doubleReset.loop();
+#ifdef DEV_BUILD
+  pollSerialCommands();
+#endif
   pollSwitch();
 
   static bool wasConnected = true;

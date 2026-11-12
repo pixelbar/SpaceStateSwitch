@@ -13,11 +13,13 @@ struct Settings {
   String mqttUsername;
   String mqttPassword;
 
-  String spaceStateUsername;
-  String spaceStateToken;
+  // Recorded as the `user` of state changes. Defaults to the hostname when empty.
+  String spaceStateUser;
+  // Bearer key with the `write` role for the space state API.
+  String spaceStateApiKey;
 
-  // Loads the settings from NVS. If no space state credentials are stored yet and
-  // an (optional, git-ignored) src/Secrets.h is present, those are used and persisted
+  // Loads the settings from NVS. If no space state API key is stored yet and an
+  // (optional, git-ignored) src/Secrets.h is present, that is used and persisted
   // so that later OTA builds, which never contain Secrets.h, keep working.
   void load();
   void save() const;
@@ -25,7 +27,7 @@ struct Settings {
   bool hasMqtt() const {
     return !mqttServer.isEmpty();
   }
-  bool hasSpaceStateCredentials() const {
-    return !spaceStateUsername.isEmpty() && !spaceStateToken.isEmpty();
+  bool hasSpaceStateApiKey() const {
+    return !spaceStateApiKey.isEmpty();
   }
 };

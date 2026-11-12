@@ -13,7 +13,7 @@ class SpaceStateSync {
  public:
   using OverrideCallback = void (*)(bool open);
 
-  void begin(const String &username, const String &token, OverrideCallback onOverride);
+  void begin(const String &user, const String &apiKey, OverrideCallback onOverride);
 
   // Queues the given state for submission. Thread-safe; only the latest state is sent.
   void submit(bool open);
@@ -26,8 +26,8 @@ class SpaceStateSync {
 
   static constexpr int8_t kNothingPending = -1;
 
-  String username_;
-  String token_;
+  String user_;
+  String apiKey_;
   OverrideCallback onOverride_ = nullptr;
   TaskHandle_t task_ = nullptr;
   std::atomic<int8_t> pending_{kNothingPending};

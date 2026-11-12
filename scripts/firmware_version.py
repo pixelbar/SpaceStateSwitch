@@ -14,3 +14,7 @@ if version.startswith("v"):
 
 print(f"Firmware version: {version}")
 env.Append(CPPDEFINES=[("FIRMWARE_VERSION", env.StringifyMacro(version))])  # noqa: F821
+
+# Development-only features (e.g. serial commands that simulate the switch).
+if version == "dev":
+    env.Append(CPPDEFINES=["DEV_BUILD"])  # noqa: F821
