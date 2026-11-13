@@ -11,7 +11,7 @@ namespace config {
 // MARK: - Hardware
 
 constexpr uint8_t kNeopixelPin = 27;    // IO27, Neopixel header (330 Ohm resistor)
-constexpr uint8_t kSwitchPin = 26;      // IO26/D0, switch header (INPUT_PULLUP)
+constexpr uint8_t kSwitchPin = 25;      // IO25, switch header (INPUT_PULLUP)
 constexpr uint8_t kBuiltinLedPin = 2;
 constexpr uint16_t kNumberOfPixels = 20;
 constexpr uint8_t kNeopixelBrightness = 80;
